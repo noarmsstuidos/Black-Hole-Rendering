@@ -1,19 +1,15 @@
-const float StepSize = 0.5;
+const float StepSize = 0.1;
 
-const float screenCurvature = 50.0;
+const float Absorption = 0.5;
 
 const float G = 1.0;
 const float c = 10.0;
 
-const vec3 S = vec3( -400.0, -100.0, -50.0 );
-
 const vec3 bhPos = vec3( 0.0 );
-const float bhMass = 5.0;
+const float bhMass = 2.0;
 const float bhRS = sqrt( 2.0 * G * bhMass / ( c * c ) );
 
-const float bhSpin = 0.8;
-
-const float spinStrength = -100.0;
+const float accretionDiskSize = 15.0;
 
 mat2 rot2D( float angle )
 {
@@ -21,6 +17,26 @@ mat2 rot2D( float angle )
     float s = sin( angle );
     
     return mat2( -c, s, s, c );
+}
+
+float sdDiskWithHole( vec3 p, float r, float t, float h )
+{
+    float d = length( p.xz ) - r;
+   
+    float ringDist = abs( d ) - t * 0.5;
+   
+    vec2 w = vec2( ringDist, abs( p.y ) - h * 0.5 );
+   
+    return min( max( w.x, w.y ), 0.0 ) + length( max( w, 0.0 ) );
+}
+
+float sdSphere( vec3 p, float r )
+{
+    return length( p ) - r;
+}
+
+float rand( float seed ) {
+    return fract( sin( seed * 12.9898 ) * 43758.5453123 );
 }
 
 float hash3( vec3 p ) {
@@ -40,137 +56,89 @@ float noise3D( vec3 x ) {
     float c = hash3( i + vec3( 0.0, 1.0, 0.0 ) );
     float d = hash3( i + vec3( 1.0, 1.0, 0.0 ) );
     float e = hash3( i + vec3( 0.0, 0.0, 1.0 ) );
-    float f_val = hash3( i + vec3( 1.0, 0.0, 1.0 ) );
+    float fVal = hash3( i + vec3( 1.0, 0.0, 1.0 ) );
     float g = hash3( i + vec3( 0.0, 1.0, 1.0 ) );
     float h = hash3( i + vec3( 1.0, 1.0, 1.0 ) );
     
     return mix( mix( mix( a, b, u.x ), mix( c, d, u.x ), u.y ),
-               mix( mix( e, f_val, u.x ), mix( g, h, u.x ), u.y ), u.z );
+               mix( mix( e, fVal, u.x ), mix( g, h, u.x ), u.y ), u.z );
 }
 
-float sdDiskWithHole( vec3 p, float r, float t, float h )
+float mapGas( vec3 p )
 {
-    float d = length( p.xz ) - r;
-   
-    float ringDist = abs( d ) - t * 0.5;
-   
-    vec2 w = vec2( ringDist, abs( p.y ) - h * 0.5 );
-   
-    return min( max( w.x, w.y ), 0.0 ) + length( max( w, 0.0 ) );
+    vec3 q = p;
+    q.xy *= rot2D( 0.2 );
+    
+    float sphere = sdDiskWithHole( q, bhRS * 3.0 + accretionDiskSize / 2.0 + bhMass * 2.0, accretionDiskSize, 1.0 );
+    
+    return sphere;
 }
 
-float sdSphere( vec3 p, float r )
-{
-    return length( p ) - r;
-}
-
-vec4 map( vec3 p )
-{
-    vec3 q1 = p;
-    q1.xz *= rot2D(iTime * 0.05 * bhSpin);
-    
-    float noise = noise3D( q1 );
-    
-    float disk = sdDiskWithHole( q1, 150.0, 100.0, ( noise + 1.0 ) * 5.0 );
-    
-    return vec4( disk, vec3( 0.2, 0.1, 0.7 ) );
-}
-
-vec4 mapSun( vec3 p )
-{
-    vec3 q1 = p;
-    q1 -= vec3( S );
-    
-    float sun = sdSphere( q1, 200.0 );
-    
-    return vec4( sun, vec3( 0.8, 0.8, 1.0 ) );
-}
-
-vec4 mapBH( vec3 p )
+float mapBH( vec3 p )
 {
     float bh = sdSphere( p, bhRS );
     
-    return vec4( bh, vec3( 0.0 ) );
+    return bh;
 }
 
-vec3 curve( vec3 dir, vec3 p )
+vec3 curve( vec3 rd, vec3 p )
 {
     vec3 pos = p - bhPos;
-    float r = length(pos);
+    float distToBH = length( pos );
     
-    vec3 grav = -pos * (StepSize * bhMass / pow(r, 3.0));
+    vec3 newDir = normalize(
+        rd - ( pos * StepSize / pow( distToBH, 3.0 ) * bhMass )
+    );
     
-    vec3 spinAxis = vec3(0.0, 1.0, 0.0);
-    
-    vec3 frameDrag = bhSpin * spinStrength * cross(spinAxis, dir) / pow(r, 3.0);
-    
-    vec3 newDir = normalize(dir + grav + frameDrag);
-
     return newDir;
 }
 
-
 vec3 rayTrace( vec2 uv )
 {
-    vec2 m = ( iMouse.xy * 2.0 - iResolution.xy ) / iResolution.y * sqrt( 2.0 ) * 2.0;
+    vec3 col = vec3( 0.0 );
     
-    vec3 col = vec3( 1.0 );
+    vec3 ro = vec3( 0.0, 0.0, -60.0 );
+    vec3 rd = normalize( vec3( uv, 5.0 ) );
     
-    vec3 ro = vec3( 0.0, 0.0, -150.0 );
-    vec3 rd = normalize( vec3( uv, 1.0 ) );
-    
-    ro.yz *= rot2D( m.y );
-    rd.yz *= rot2D( m.y );
-    
-    ro.xz *= rot2D( m.x );
-    rd.xz *= rot2D( m.x );
+    ro.yz *= rot2D( 0.3 );
+    rd.yz *= rot2D( 0.3 );
     
     vec3 p = ro;
     
-    vec4 d;
+    float d;
+    
+    float density = 0.0;
     
     float illumination = 0.0;
     
-    int collisionAmt = 0;
-    
-    for( int i = 0; i < 1500; i ++ )
+    for( int i = 0; i < int( length( ro ) * 2.0 / StepSize ); i ++ )
     {
         p += rd * StepSize;
         
-        d = map( p );
+        d = mapGas( p );
         
-        if( d.x < 0.0 )
+        if( d < 0.0 )
         {
-            if( collisionAmt < 1 )
-            {
-                col *= d.yzw;
-                
-                rd = normalize( S - p );
-                
-                collisionAmt ++;
-                
-                p += rd * 2.0;
-            } else {
-                break;
-            }
-        }
-        
-        d = mapSun( p );
-        
-        if( d.x < 0.0 )
-        {
-            col *= d.yzw;
+            col = vec3( 1.0, 0.3, 0.0 );
             
-            illumination += 1.0;
+            vec3 q = p;
+            q.xz *= rot2D( iTime );
             
-            break;
+            vec3 lightDir = normalize( -q );
+            
+            illumination += sqrt( 0.006 / pow( length( q / ( accretionDiskSize ) * 3.0 ), 2.0 ) * 10.0 );
+            
+            q = p;
+            q.xz *= rot2D( iTime / 20.0 );
+            
+            density += noise3D( vec3( length( q ) ) + q / 5.0 ) * StepSize * Absorption;
         }
         
         d = mapBH( p );
         
-        if( d.x < 0.0 )
+        if( d < 0.0 )
         {
-            col = d.yzw;
+            col = vec3( 0.0 );
             
             break;
         }
@@ -178,7 +146,9 @@ vec3 rayTrace( vec2 uv )
         rd = curve( rd, p );
     }
     
-    col *= illumination;
+    col += density;
+    
+    col *= illumination * 3.0 * StepSize;
     
     return col;
 }
@@ -193,9 +163,8 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     {
         col = rayTrace( uv );
     } else {
-        col = vec3( 0.1 );
+        col = vec3( 0.02 );
     }
-        
-    fragColor = vec4(col,1.0);
+    
+    fragColor = vec4( col, 1.0 );
 }
-
